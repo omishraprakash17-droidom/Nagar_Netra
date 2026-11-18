@@ -45,7 +45,7 @@ Stop the old Flask process with Ctrl+C, then:
 ```powershell
 python app.py
 ```
-Open http://127.0.0.1:5000/ and check http://127.0.0.1:5000/api/health.
+Open  https://nagar-netra.onrender.com
 
 ## Confidence handling
 Default threshold is 60%. Lower-confidence predictions trigger a manual-review warning and retain the user's category selection. This is a workflow threshold, not a calibrated probability guarantee; tune it on an independent validation set and inspect per-class precision/recall.
