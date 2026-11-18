@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NagarNetra — Civic Issue Reporting</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <style>
+    :root { --bg:#0b1020; --card:#141b2e; --card2:#1b2440; --text:#e8eefc; --muted:#9aabc9; --accent:#4f8cff; --ok:#22c55e; --bad:#ef4444; }
+    * { box-sizing:border-box; }
+    body { margin:0; padding:24px; font-family:Segoe UI,system-ui,sans-serif; background:var(--bg); color:var(--text); }
+    .wrap { max-width:1100px; margin:auto; }
+    header,.row { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+    header { margin-bottom:20px; }
+    h1 { margin:0; font-size:25px; } h2 { margin-top:0; font-size:19px; }
+    .muted,small { color:var(--muted); }
+    .panel,.cat-card { background:var(--card); border:1px solid #293653; border-radius:16px; padding:20px; margin-bottom:16px; }
+    .stepper,.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:18px; }
+    .step-chip,.cat-card { cursor:pointer; }
+    .step-chip { padding:12px; border-radius:10px; background:var(--card2); color:var(--muted); text-align:center; border:1px solid #293653; }
+    .step-chip.active { color:white; background:#2457a8; }
+    .step-chip.done { border-color:var(--ok); }
+    .cat-card { margin:0; text-align:left; color:var(--text); }
+    .cat-card:hover,.cat-card.selected { border-color:var(--accent); }
+    .emoji { font-size:30px; } .cat-card h3 { margin:8px 0 4px; }
+    button,input,select { font:inherit; border-radius:9px; padding:11px 13px; }
+    button { border:0; background:var(--accent); color:white; cursor:pointer; font-weight:600; }
+    button.secondary { background:var(--card2); border:1px solid #354567; }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    input,select { width:100%; background:var(--card2); color:var(--text); border:1px solid #354567; }
+    .row > input,.row > select { flex:1; min-width:190px; }
+    .map { height:300px; border-radius:12px; margin:14px 0; overflow:hidden; }
+    .dropzone { border:2px dashed #405579; border-radius:12px; padding:28px; text-align:center; cursor:pointer; background:var(--card2); }
+    .dropzone.drag { border-color:var(--accent); }
+    .hidden { display:none !important; }
+    .result,.status { margin-top:16px; padding:16px; border-radius:12px; background:var(--card2); }
+    .status { background:#123326; border:1px solid var(--ok); overflow-wrap:anywhere; }
+    .error { color:#fecaca; background:#451a1a; padding:12px; border-radius:9px; margin-top:12px; }
+    .review-warning { margin-top:12px; padding:12px; border:1px solid #d97706; background:#422006; color:#ffedd5; border-radius:9px; }
+    @media(max-width:600px) { body { padding:12px; } }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div><h1>🏙️ NagarNetra</h1><div class="muted">Civic issue reporting · Image classification · Location capture</div></div>
+    <span id="health" class="muted">Checking backend…</span>
+  </header>
+
+  <nav class="stepper" aria-label="Report steps">
+    <div class="step-chip active" data-step="0">1 · Category</div>
+    <div class="step-chip" data-step="1">2 · Location</div>
+    <div class="step-chip" data-step="2">3 · Image analysis</div>
+    <div class="step-chip" data-step="3">4 · Review</div>
+    <div class="step-chip" data-step="4">5 · Submit</div>
+  </nav>
+
+  <section id="step-0">
+    <h2>Select the issue category</h2>
+    <div class="grid" id="categoryGrid">
+      <button class="cat-card" data-cat="potholes"><span class="emoji">🕳️</span><h3>Potholes</h3><small>Road surface damage</small></button>
+      <button class="cat-card" data-cat="illegal_buildings"><span class="emoji">🏗️</span><h3>Suspected illegal buildings</h3><small>Possible encroachment or unauthorized construction; verify legally</small></button>
+      <button class="cat-card" data-cat="sanitation"><span class="emoji">🚰</span><h3>Sanitation</h3><small>Open drains, sewage and public hygiene</small></button>
+      <button class="cat-card" data-cat="garbage"><span class="emoji">🗑️</span><h3>Garbage</h3><small>Roadside dumping and litter</small></button>
+      <button class="cat-card" data-cat="street_lights"><span class="emoji">💡</span><h3>Street lights</h3><small>Broken or non-functional street lighting</small></button>
+      <button class="cat-card" data-cat="hanging_wires"><span class="emoji">⚡</span><h3>Hanging wires</h3><small>Low-hanging or tangled overhead cables</small></button>
+    </div>
+  </section>
+
+  <section id="step-1" class="hidden">
+    <div class="panel">
+      <h2>📍 Set the location</h2>
+      <div class="row">
+        <button id="gpsBtn" class="secondary" type="button">Use my GPS</button>
+        <input id="landmark" placeholder="Landmark or area (optional)">
+      </div>
+      <div id="map" class="map"></div>
+      <p id="coords" class="muted">21.1938, 81.3509</p>
+      <div class="row"><button class="secondary" data-nav="0">Back</button><button data-nav="2">Continue</button></div>
+    </div>
+  </section>
+
+  <section id="step-2" class="hidden">
+    <div class="panel">
+      <h2>📸 Upload a photograph</h2>
+      <div id="dropzone" class="dropzone" tabindex="0">Click or drop an image here<br><small>JPG, PNG or other browser-supported image · max 8 MB</small></div>
+      <input id="fileInput" class="hidden" type="file" accept="image/*">
+      <p id="fileName" class="muted"></p>
+      <p id="analysisError" class="error hidden"></p>
+      <div id="loader" class="muted hidden">Analyzing image…</div>
+      <div id="resultBox" class="result hidden">
+        <h3 id="resCategory">Result</h3>
+        <p>Model confidence: <strong id="resConf"></strong></p>
+        <p id="predictionDetail" class="muted"></p>
+        <div id="manualReview" class="review-warning hidden" role="alert"></div>
+      </div>
+      <div class="row" style="margin-top:16px"><button class="secondary" data-nav="1">Back</button><button id="toReview" data-nav="3" disabled>Continue to review</button></div>
+    </div>
+  </section>
+
+  <section id="step-3" class="hidden">
+    <div class="panel">
+      <h2>Review your report</h2>
+      <p id="reviewCategory"></p><p id="reviewLocation" class="muted"></p><p id="reviewConfidence" class="muted"></p>
+      <p class="muted">Construction or compliance concerns require human verification. The model does not determine legal violations.</p>
+      <div class="row"><button class="secondary" data-nav="2">Back</button><button data-nav="4">Continue to submit</button></div>
+    </div>
+  </section>
+
+  <section id="step-4" class="hidden">
+    <div class="panel">
+      <h2>🚨 Submit complaint record</h2>
+      <div class="row"><input id="cName" placeholder="Your name (optional)"><input id="cPhone" placeholder="Phone (optional)"></div>
+      <label for="destinationType" class="muted">Complaint destination</label>
+      <select id="destinationType" style="margin:8px 0 10px">
+        <option value="municipal">Municipal authority</option>
+        <option value="police">Police station / SP office</option>
+        <option value="rti">RTI — Public Information Officer</option>
+        <option value="electricity">Electricity distribution office</option>
+        <option value="email_only">Other verified email recipient</option>
+      </select>
+      <label for="destinationEmail" class="muted">Verified official recipient email (optional)</label>
+      <input id="destinationEmail" type="email" placeholder="Select a result below or enter an officially verified email">
+      <button id="findAuthorityBtn" class="secondary" type="button" style="margin-top:10px">📍 Find nearby official email using GPS</button>
+      <p id="authorityLocation" class="muted"></p>
+      <div id="authorityResults" class="result hidden"></div>
+      <p id="authorityNotice" class="muted">Nearby contact search uses your GPS area and public web results. Every email must be checked against its official source before use.</p>
+      <button id="submitBtn" type="button" style="margin-top:12px">Generate application & save complaint</button>
+      <p class="muted">Choose the authority that should handle this issue. Enter its official email only after checking the authority's website or notice. After saving, NagarNetra will prepare a Gmail draft addressed to that recipient. You review and send it yourself.</p>
+      <p class="muted">Applicant name and phone are displayed as XYZ in the generated PDF. The app does not guess official email addresses or submit complaints automatically.</p>
+      <div id="statusBox" class="status hidden" aria-live="polite"></div>
+      <p id="dispatchError" class="error hidden"></p>
+      <div class="row" style="margin-top:16px"><button class="secondary" data-nav="3">Back</button></div>
+    </div>
+  </section>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+const STATE = {
+  category: null, landmark: "", lat: 21.1938, lng: 81.3509, areaName: "",
+  aiData: null, currentStep: 0, complaintSubmitted: false
+};
+const $ = id => document.getElementById(id);
+
+function goStep(n) {
+  if (!Number.isInteger(n) || n < 0 || n > 4) return;
+  if (n > STATE.currentStep + 1) return;
+  if (n >= 1 && !STATE.category) return;
+  if (n >= 3 && !STATE.aiData) return;
+  if (n === 4) {
+    $("reviewCategory").textContent = `Category: ${STATE.aiData.category}`;
+    $("reviewLocation").textContent = `Location: ${STATE.lat.toFixed(5)}, ${STATE.lng.toFixed(5)} · ${STATE.landmark || "No landmark supplied"}`;
+    $("reviewConfidence").textContent = `Model confidence: ${STATE.aiData.confidence}%`;
+  }
+  document.querySelectorAll("section[id^='step-']").forEach(s => s.classList.add("hidden"));
+  $("step-" + n).classList.remove("hidden");
+  document.querySelectorAll(".step-chip").forEach((chip, i) => {
+    chip.classList.toggle("active", i === n);
+    chip.classList.toggle("done", i < n);
+  });
+  STATE.currentStep = n;
+  if (n === 1 && map) setTimeout(() => map.invalidateSize(), 100);
+  window.scrollTo({top: 0, behavior: "smooth"});
+}
+
+document.querySelectorAll(".step-chip").forEach(chip => {
+  chip.addEventListener("click", () => goStep(Number(chip.dataset.step)));
+});
+document.querySelectorAll("[data-nav]").forEach(button => {
+  button.addEventListener("click", () => goStep(Number(button.dataset.nav)));
+});
+document.querySelectorAll(".cat-card").forEach(card => {
+  card.addEventListener("click", () => {
+    STATE.category = card.dataset.cat;
+    document.querySelectorAll(".cat-card").forEach(c => c.classList.toggle("selected", c === card));
+    goStep(1);
+  });
+});
+
+let map, marker;
+if (window.L) {
+  map = L.map("map").setView([STATE.lat, STATE.lng], 13);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+  marker = L.marker([STATE.lat, STATE.lng], {draggable: true}).addTo(map);
+  function setLocation(lat, lng) {
+    STATE.lat = lat; STATE.lng = lng;
+    marker.setLatLng([lat, lng]);
+    $("coords").textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  }
+  marker.on("dragend", () => {
+    const p = marker.getLatLng(); setLocation(p.lat, p.lng);
+  });
+  map.on("click", e => setLocation(e.latlng.lat, e.latlng.lng));
+} else {
+  $("map").textContent = "Map library could not load. Location defaults are still available.";
+}
+
+$("gpsBtn").addEventListener("click", () => {
+  if (!navigator.geolocation) return alert("Geolocation is not supported by this browser.");
+  navigator.geolocation.getCurrentPosition(pos => {
+    const {latitude, longitude} = pos.coords;
+    if (map) map.setView([latitude, longitude], 16);
+    if (marker) {
+      marker.setLatLng([latitude, longitude]);
+      STATE.lat = latitude; STATE.lng = longitude;
+    }
+    $("coords").textContent = `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
+  }, err => alert(`Could not get GPS location: ${err.message}`), {enableHighAccuracy: true, timeout: 10000});
+});
+$("landmark").addEventListener("input", e => STATE.landmark = e.target.value);
+
+async function checkHealth() {
+  try {
+    const response = await fetch("/api/health");
+    const data = await response.json();
+    $("health").textContent = data.model_loaded ? "Backend online · model loaded" : "Backend online · model not trained";
+  } catch {
+    $("health").textContent = "Backend unavailable";
+  }
+}
+checkHealth();
+
+const dropzone = $("dropzone"), fileInput = $("fileInput");
+dropzone.addEventListener("click", () => fileInput.click());
+dropzone.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") fileInput.click(); });
+dropzone.addEventListener("dragover", e => { e.preventDefault(); dropzone.classList.add("drag"); });
+dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag"));
+dropzone.addEventListener("drop", e => {
+  e.preventDefault(); dropzone.classList.remove("drag");
+  if (e.dataTransfer.files[0]) handleImage(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener("change", e => {
+  if (e.target.files[0]) handleImage(e.target.files[0]);
+});
+
+async function handleImage(file) {
+  STATE.aiData = null;
+  $("toReview").disabled = true;
+  $("resultBox").classList.add("hidden");
+  $("analysisError").classList.add("hidden");
+  $("fileName").textContent = file.name;
+  if (!file.type.startsWith("image/")) {
+    $("analysisError").textContent = "Please choose an image file.";
+    $("analysisError").classList.remove("hidden"); return;
+  }
+  if (file.size > 8 * 1024 * 1024) {
+    $("analysisError").textContent = "Image must be 8 MB or smaller.";
+    $("analysisError").classList.remove("hidden"); return;
+  }
+  $("loader").classList.remove("hidden");
+  const form = new FormData();
+  form.append("image", file);
+  form.append("selected_category", STATE.category || "");
+  try {
+    const response = await fetch("/api/analyze", {method: "POST", body: form});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Analysis failed");
+    STATE.aiData = data;
+    $("resCategory").textContent = data.category.replaceAll("_", " ").toUpperCase();
+    $("resConf").textContent = `${data.confidence}%`;
+    $("predictionDetail").textContent = data.needs_review
+      ? `Top AI suggestion: ${data.predicted_category.replaceAll("_", " ")}. The selected category from step 1 is retained for manual review.`
+      : `AI prediction: ${data.predicted_category.replaceAll("_", " ")}. Please visually verify before submitting.`;
+    const warning = $("manualReview");
+    if (data.needs_review) {
+      warning.textContent = data.review_message;
+      warning.classList.remove("hidden");
+    } else {
+      warning.classList.add("hidden");
+      warning.textContent = "";
+    }
+    $("resultBox").classList.remove("hidden");
+    $("toReview").disabled = false;
+  } catch (err) {
+    $("analysisError").textContent = err.message;
+    $("analysisError").classList.remove("hidden");
+  } finally {
+    $("loader").classList.add("hidden");
+  }
+}
+
+
+$("findAuthorityBtn").addEventListener("click", async () => {
+  const button = $("findAuthorityBtn");
+  const destination = $("destinationType").value;
+  const runLookup = async () => {
+    button.disabled = true;
+    button.textContent = "Searching nearby official contacts…";
+    $("authorityResults").classList.remove("hidden");
+    $("authorityResults").textContent = "Resolving your GPS area and searching public authority contact pages…";
+    try {
+      const params = new URLSearchParams({
+        lat: String(STATE.lat), lng: String(STATE.lng),
+        category: STATE.aiData?.category || STATE.category || "",
+        destination
+      });
+      const response = await fetch(`/api/nearby-authorities?${params}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Contact search failed");
+      STATE.areaName = data.location || "";
+      $("authorityLocation").textContent = `GPS area detected: ${STATE.areaName}`;
+      $("authorityResults").replaceChildren();
+      const intro = document.createElement("p");
+      intro.textContent = data.results.length
+        ? "Possible public contact addresses (not verified). Open the source and confirm the email before selecting it:"
+        : "No email address was found in the search snippets. Try another destination or enter an email from the authority's official website.";
+      $("authorityResults").append(intro);
+      data.results.forEach(item => {
+        const row = document.createElement("div");
+        row.style.padding = "10px 0";
+        row.style.borderTop = "1px solid #405579";
+        const email = document.createElement("strong");
+        email.textContent = item.email;
+        const source = document.createElement("a");
+        source.href = item.source_url;
+        source.target = "_blank";
+        source.rel = "noopener";
+        source.textContent = item.title || "Open source page";
+        source.style.display = "block";
+        source.style.color = "#93c5fd";
+        source.style.margin = "5px 0";
+        const snippet = document.createElement("small");
+        snippet.textContent = item.snippet || "";
+        snippet.style.display = "block";
+        const select = document.createElement("button");
+        select.type = "button";
+        select.className = "secondary";
+        select.textContent = "Use this email";
+        select.addEventListener("click", () => {
+          $("destinationEmail").value = item.email;
+          $("authorityNotice").textContent = `Selected ${item.email}. Verify it on the linked source page before opening Gmail.`;
+        });
+        row.append(email, source, snippet, select);
+        $("authorityResults").append(row);
+      });
+      const notice = document.createElement("p");
+      notice.textContent = data.notice;
+      $("authorityResults").append(notice);
+    } catch (err) {
+      $("authorityResults").textContent = err.message;
+    } finally {
+      button.disabled = false;
+      button.textContent = "📍 Find nearby official email using GPS";
+    }
+  };
+
+  if (!navigator.geolocation) {
+    $("authorityResults").textContent = "This browser does not support GPS. Set the map pin manually first.";
+    $("authorityResults").classList.remove("hidden");
+    return;
+  }
+  button.disabled = true;
+  button.textContent = "Getting GPS…";
+  navigator.geolocation.getCurrentPosition(pos => {
+    STATE.lat = pos.coords.latitude;
+    STATE.lng = pos.coords.longitude;
+    if (map && marker) {
+      marker.setLatLng([STATE.lat, STATE.lng]);
+      map.setView([STATE.lat, STATE.lng], 15);
+    }
+    $("coords").textContent = `${STATE.lat.toFixed(5)}, ${STATE.lng.toFixed(5)}`;
+    runLookup();
+  }, err => {
+    button.disabled = false;
+    button.textContent = "📍 Find nearby official email using GPS";
+    $("authorityResults").textContent = `GPS unavailable: ${err.message}. Allow location permission or set the map pin manually.`;
+    $("authorityResults").classList.remove("hidden");
+  }, {enableHighAccuracy: true, timeout: 12000});
+});
+
+$("submitBtn").addEventListener("click", async () => {
+  if (!STATE.aiData) return;
+  const button = $("submitBtn");
+  button.disabled = true; button.textContent = "Saving…";
+  $("dispatchError").classList.add("hidden");
+  const payload = {
+    name: $("cName").value.trim() || "Anonymous",
+    phone: $("cPhone").value.trim(),
+    destination_type: $("destinationType").value,
+    destination_email: $("destinationEmail").value.trim(),
+    category: STATE.aiData.category,
+    confidence: STATE.aiData.confidence,
+    lat: STATE.lat, lng: STATE.lng, landmark: STATE.landmark,
+    area_name: STATE.areaName
+  };
+  try {
+    const response = await fetch("/api/dispatch", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Could not save complaint");
+    $("statusBox").innerHTML = "";
+    const title = document.createElement("strong");
+    title.textContent = "Application generated and complaint saved";
+    const details = document.createElement("p");
+    details.textContent = `Reference: ${result.ref_id} · Destination: ${result.dispatched_to}`;
+    const hash = document.createElement("p");
+    hash.textContent = `SHA-256: ${result.application_sha256}`;
+    const note = document.createElement("p");
+    note.textContent = result.message;
+    const recipientInfo = document.createElement("p");
+    recipientInfo.textContent = `Gmail recipient: ${recipient || "Not selected — search using GPS or enter a verified official email."}`;
+    const download = document.createElement("a");
+    download.href = result.application_url;
+    download.textContent = "Download masked complaint application (PDF)";
+    download.style.color = "#93c5fd";
+    download.style.display = "block";
+    download.style.marginTop = "10px";
+    const verify = document.createElement("a");
+    verify.href = result.verification_url;
+    verify.target = "_blank";
+    verify.rel = "noopener";
+    verify.textContent = "Verify application integrity";
+    verify.style.color = "#93c5fd";
+    verify.style.display = "block";
+    verify.style.marginTop = "8px";
+
+    const categoryLabel = STATE.aiData.category.replaceAll("_", " ");
+    const destinationLabel = $("destinationType").selectedOptions[0].textContent;
+    const recipient = $("destinationEmail").value.trim();
+    const subject = `Civic complaint: ${categoryLabel} · ${result.ref_id}`;
+    const locationText = `${STATE.lat.toFixed(5)}, ${STATE.lng.toFixed(5)}${STATE.landmark ? " · " + STATE.landmark : ""}`;
+    const bodyText = $("destinationType").value === "rti"
+      ? `To,
+The Public Information Officer,
+${result.dispatched_to},
+${STATE.areaName || "Jurisdiction to be verified"}
+
+Subject: Application under the Right to Information Act, 2005 – information regarding ${categoryLabel} issue (NagarNetra Ref: ${result.ref_id})
+
+Respected Sir/Madam,
+
+I request information under the Right to Information Act, 2005 regarding the civic issue recorded at the location stated below. Kindly provide the name/designation of the responsible department, the action taken or proposed on this complaint, the relevant file/diary number, and the procedure for obtaining further status updates. Please inform me if this request should be transferred to another public authority under the applicable provisions.
+
+Issue: ${categoryLabel}
+Location: ${locationText}
+NagarNetra reference: ${result.ref_id}
+Application SHA-256: ${result.application_sha256}
+
+The formal application PDF is available to attach with this email. Please advise if a prescribed RTI application fee or portal submission is required.
+
+Yours faithfully,
+XYZ
+Applicant (identity masked in this copy)`
+      : `To,
+The ${result.dispatched_to},
+${STATE.areaName || "Jurisdiction to be verified"}
+
+Subject: Formal complaint and request for inspection/action regarding ${categoryLabel} at ${locationText} (NagarNetra Ref: ${result.ref_id})
+
+Respected Sir/Madam,
+
+I respectfully submit this complaint to bring to your notice the civic issue described below. I request your office to kindly verify the reported condition, arrange an inspection through the concerned officer, and take appropriate action in accordance with applicable rules and procedures. If this matter falls outside your jurisdiction, kindly forward it to the competent office or inform me of the correct authority.
+
+Particulars of the complaint:
+1. Issue: ${categoryLabel}
+2. Location: ${locationText}
+3. NagarNetra reference: ${result.ref_id}
+4. Application SHA-256: ${result.application_sha256}
+
+I request an acknowledgement and the official complaint/diary reference number, together with an update on the action taken. I will attach the formal, masked complaint application PDF for your review.
+
+Thank you.
+
+Yours faithfully,
+XYZ
+Applicant (identity masked in this copy)`;
+
+    const gmailUrl = "https://mail.google.com/mail/?view=cm&fs=1"
+      + "&to=" + encodeURIComponent(recipient)
+      + "&su=" + encodeURIComponent(subject)
+      + "&body=" + encodeURIComponent(bodyText);
+    const gmailLink = document.createElement("a");
+    gmailLink.href = gmailUrl;
+    gmailLink.target = "_blank";
+    gmailLink.rel = "noopener";
+    gmailLink.textContent = "Open Gmail with this complaint";
+    gmailLink.style.display = "inline-block";
+    gmailLink.style.marginTop = "14px";
+    gmailLink.style.padding = "11px 15px";
+    gmailLink.style.borderRadius = "9px";
+    gmailLink.style.background = "#4f8cff";
+    gmailLink.style.color = "white";
+    gmailLink.style.fontWeight = "600";
+    gmailLink.style.textDecoration = "none";
+    const attachHint = document.createElement("p");
+    attachHint.textContent = "In Gmail, attach the PDF you downloaded above, check the recipient and message, then press Send. Gmail does not allow this app to attach files automatically.";
+    $("statusBox").append(title, details, hash, note, recipientInfo, download, verify, gmailLink, attachHint);
+    $("statusBox").classList.remove("hidden");
+    button.textContent = "Application generated";
+    STATE.complaintSubmitted = true;
+  } catch (err) {
+    $("dispatchError").textContent = err.message;
+    $("dispatchError").classList.remove("hidden");
+    button.disabled = false; button.textContent = "Save complaint";
+  }
+});
+</script>
+</body>
+</html>

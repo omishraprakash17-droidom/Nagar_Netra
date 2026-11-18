@@ -1,0 +1,29 @@
+{
+  "architecture": "MobileNetV2 transfer learning",
+  "image_size": [
+    224,
+    224
+  ],
+  "categories": [
+    "potholes",
+    "illegal_buildings",
+    "sanitation",
+    "garbage",
+    "street_lights",
+    "hanging_wires"
+  ],
+  "input_format": "RGB float32 pixels in range 0..255; preprocessing embedded in model",
+  "training_data": "dataset/real",
+  "class_counts": {
+    "potholes": 10,
+    "illegal_buildings": 10,
+    "sanitation": 10,
+    "garbage": 10,
+    "street_lights": 10,
+    "hanging_wires": 10
+  },
+  "test_loss": 0.7812989354133606,
+  "test_accuracy": 0.7777777910232544,
+  "confidence_threshold": 0.6,
+  "synthetic_data_used": false
+}
