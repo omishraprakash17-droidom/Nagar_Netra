@@ -139,6 +139,20 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
+const API_BASE_URL = "https://nagar-netra.onrender.com";
+
+async function apiFetch(path, options = {}) {
+  const response = await fetch(`${API_BASE_URL}${path}`, options);
+  const raw = await response.text();
+  let data = {};
+  if (raw) {
+    try { data = JSON.parse(raw); }
+    catch { throw new Error(`Backend returned non-JSON (HTTP ${response.status}): ${raw.slice(0, 240)}`); }
+  }
+  if (!response.ok) throw new Error(data.error || data.message || `Backend request failed (HTTP ${response.status})`);
+  return data;
+}
+
 const STATE = {
   category: null, landmark: "", lat: 21.1938, lng: 81.3509, areaName: "",
   aiData: null, currentStep: 0, complaintSubmitted: false
@@ -216,8 +230,7 @@ $("landmark").addEventListener("input", e => STATE.landmark = e.target.value);
 
 async function checkHealth() {
   try {
-    const response = await fetch("/api/health");
-    const data = await response.json();
+    const data = await apiFetch("/api/health");
     $("health").textContent = data.model_loaded ? "Backend online · model loaded" : "Backend online · model not trained";
   } catch {
     $("health").textContent = "Backend unavailable";
@@ -257,9 +270,7 @@ async function handleImage(file) {
   form.append("image", file);
   form.append("selected_category", STATE.category || "");
   try {
-    const response = await fetch("/api/analyze", {method: "POST", body: form});
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Analysis failed");
+    const data = await apiFetch("/api/analyze", {method: "POST", body: form});
     STATE.aiData = data;
     $("resCategory").textContent = data.category.replaceAll("_", " ").toUpperCase();
     $("resConf").textContent = `${data.confidence}%`;
@@ -299,9 +310,7 @@ $("findAuthorityBtn").addEventListener("click", async () => {
         category: STATE.aiData?.category || STATE.category || "",
         destination
       });
-      const response = await fetch(`/api/nearby-authorities?${params}`);
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Contact search failed");
+      const data = await apiFetch(`/api/nearby-authorities?${params}`);
       STATE.areaName = data.location || "";
       $("authorityLocation").textContent = `GPS area detected: ${STATE.areaName}`;
       $("authorityResults").replaceChildren();
@@ -389,12 +398,10 @@ $("submitBtn").addEventListener("click", async () => {
     area_name: STATE.areaName
   };
   try {
-    const response = await fetch("/api/dispatch", {
+    const result = await apiFetch("/api/dispatch", {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify(payload)
     });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Could not save complaint");
     $("statusBox").innerHTML = "";
     const title = document.createElement("strong");
     title.textContent = "Application generated and complaint saved";
@@ -404,16 +411,17 @@ $("submitBtn").addEventListener("click", async () => {
     hash.textContent = `SHA-256: ${result.application_sha256}`;
     const note = document.createElement("p");
     note.textContent = result.message;
+    const recipient = $("destinationEmail").value.trim();
     const recipientInfo = document.createElement("p");
     recipientInfo.textContent = `Gmail recipient: ${recipient || "Not selected — search using GPS or enter a verified official email."}`;
     const download = document.createElement("a");
-    download.href = result.application_url;
+    download.href = `${API_BASE_URL}${result.application_url}`;
     download.textContent = "Download masked complaint application (PDF)";
     download.style.color = "#93c5fd";
     download.style.display = "block";
     download.style.marginTop = "10px";
     const verify = document.createElement("a");
-    verify.href = result.verification_url;
+    verify.href = `${API_BASE_URL}${result.verification_url}`;
     verify.target = "_blank";
     verify.rel = "noopener";
     verify.textContent = "Verify application integrity";
@@ -423,7 +431,6 @@ $("submitBtn").addEventListener("click", async () => {
 
     const categoryLabel = STATE.aiData.category.replaceAll("_", " ");
     const destinationLabel = $("destinationType").selectedOptions[0].textContent;
-    const recipient = $("destinationEmail").value.trim();
     const subject = `Civic complaint: ${categoryLabel} · ${result.ref_id}`;
     const locationText = `${STATE.lat.toFixed(5)}, ${STATE.lng.toFixed(5)}${STATE.landmark ? " · " + STATE.landmark : ""}`;
     const bodyText = $("destinationType").value === "rti"
