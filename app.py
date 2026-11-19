@@ -7,6 +7,7 @@ import uuid
 import hashlib
 import os
 import re
+import time
 from datetime import datetime, timezone
 
 import numpy as np
@@ -34,8 +35,25 @@ app = Flask(__name__, static_folder=str(BASE_DIR))
 app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024  # 8 MB
 CORS(app)
 
+# Keep TensorFlow's CPU thread usage bounded on small Render instances.
+# These settings must be applied before model loading / first inference.
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
+os.environ.setdefault("TF_NUM_INTRAOP_THREADS", "1")
+os.environ.setdefault("TF_NUM_INTEROP_THREADS", "1")
+
+try:
+    tf.config.set_visible_devices([], "GPU")
+except Exception:
+    pass
+
+try:
+    tf.config.threading.set_intra_op_parallelism_threads(1)
+    tf.config.threading.set_inter_op_parallelism_threads(1)
+except RuntimeError:
+    # TensorFlow may already have initialized its runtime.
+    pass
+
 # Load model metadata and model once when the server starts.
-# training; /api/health reports that the model is unavailable.
 model = None
 model_load_error = None
 model_metadata = {}
@@ -45,18 +63,47 @@ if MODEL_METADATA_PATH.exists():
     except Exception as exc:
         model_load_error = f"Could not read model metadata: {exc}"
 
-MODEL_IMAGE_SIZE = tuple(model_metadata.get("image_size", IMAGE_SIZE))
-
 if MODEL_PATH.exists():
     try:
-        model = tf.keras.models.load_model(MODEL_PATH)
+        model = tf.keras.models.load_model(MODEL_PATH, compile=False)
         metadata_categories = model_metadata.get("categories")
         if metadata_categories and metadata_categories != CATEGORIES:
             raise ValueError("Model metadata class order does not match app.py CATEGORIES.")
+
+        # Prefer the dimensions embedded in the actual model. The supplied
+        # model_v5.keras expects 224x224 RGB input, not the legacy 128x128.
+        input_shape = model.input_shape
+        if isinstance(input_shape, list):
+            input_shape = input_shape[0]
+        if len(input_shape) == 4 and input_shape[1] and input_shape[2]:
+            MODEL_IMAGE_SIZE = (int(input_shape[2]), int(input_shape[1]))
+        else:
+            MODEL_IMAGE_SIZE = tuple(model_metadata.get("image_size", IMAGE_SIZE))
+
+        # This MobileNetV2 model contains its own Rescaling preprocessing
+        # layer and expects RGB pixel values in the 0..255 range.
+        has_embedded_rescaling = any(
+            isinstance(layer, tf.keras.layers.Rescaling) for layer in model.layers
+        )
+        input_format = model_metadata.get("input_format", "")
+        MODEL_EXPECTS_0_255 = (
+            input_format.startswith("RGB float32 pixels in range 0..255")
+            or (not input_format and has_embedded_rescaling)
+        )
+        app.logger.info(
+            "Model loaded: input=%s output=%s image_size=%s embedded_rescaling=%s",
+            model.input_shape, model.output_shape, MODEL_IMAGE_SIZE, has_embedded_rescaling
+        )
     except Exception as exc:
+        model = None
         model_load_error = str(exc)
+        app.logger.exception("Model loading failed")
 else:
+    MODEL_EXPECTS_0_255 = False
     model_load_error = f"Model file not found: {MODEL_PATH.name}"
+
+if model is None:
+    MODEL_EXPECTS_0_255 = False
 
 
 def get_db():
@@ -99,6 +146,8 @@ def init_db():
 
 
 init_db()
+
+
 def migrate_db():
     additions = {
         "applicant_name": "TEXT", "applicant_phone": "TEXT",
@@ -208,6 +257,7 @@ def health():
 
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
+    started_at = time.perf_counter()
     if model is None:
         return jsonify({
             "error": "The AI model is not available. Train a model and restart Flask.",
@@ -219,15 +269,28 @@ def analyze():
         return jsonify({"error": "Please upload an image using the 'image' field."}), 400
 
     try:
-        image = Image.open(io.BytesIO(uploaded.read())).convert("RGB").resize(MODEL_IMAGE_SIZE)
-        array = np.asarray(image, dtype=np.float32)
-        # New MobileNetV2 model embeds preprocessing. Legacy CNN expects [0,1].
-        if not model_metadata.get("input_format", "").startswith("RGB float32 pixels in range 0..255"):
-            array = array / 255.0
+        image_bytes = uploaded.read()
+        if not image_bytes:
+            return jsonify({"error": "The uploaded image is empty."}), 400
 
-        prediction = model.predict(np.expand_dims(array, axis=0), verbose=0)
-        scores = prediction[0] if isinstance(prediction, (list, tuple)) else prediction
-        scores = np.asarray(scores)
+        with Image.open(io.BytesIO(image_bytes)) as source_image:
+            image = source_image.convert("RGB").resize(
+                MODEL_IMAGE_SIZE, Image.Resampling.BILINEAR
+            )
+
+        array = np.asarray(image, dtype=np.float32)
+        # The supplied MobileNetV2 model embeds Rescaling preprocessing and
+        # expects raw RGB pixels in 0..255. Legacy models expect 0..1.
+        if not MODEL_EXPECTS_0_255:
+            array /= 255.0
+
+        batch = np.expand_dims(array, axis=0)
+        # Calling the model directly avoids the extra predict() data adapter
+        # and is more efficient for a single-image request.
+        prediction = model(batch, training=False)
+        if isinstance(prediction, (list, tuple)):
+            prediction = prediction[0]
+        scores = np.asarray(prediction)
         if scores.ndim != 2 or scores.shape[1] != len(CATEGORIES):
             return jsonify({"error": "Model output shape does not match the six configured categories."}), 500
 
@@ -243,6 +306,7 @@ def analyze():
 
         uncertain = confidence < threshold
         chosen_category = selected_category if uncertain and selected_category else CATEGORIES[best_index]
+        app.logger.info("Image analysis completed in %.2f seconds", time.perf_counter() - started_at)
         return jsonify({
             "category": chosen_category,
             "predicted_category": CATEGORIES[best_index],
@@ -258,7 +322,7 @@ def analyze():
     except (UnidentifiedImageError, OSError):
         return jsonify({"error": "The uploaded file is not a valid image."}), 400
     except Exception as exc:
-        app.logger.exception("Image analysis failed")
+        app.logger.exception("Image analysis failed after %.2f seconds", time.perf_counter() - started_at)
         return jsonify({"error": f"Image analysis failed: {str(exc)}"}), 500
 
 
