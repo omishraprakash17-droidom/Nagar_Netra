@@ -6,6 +6,7 @@ import sqlite3
 import uuid
 import hashlib
 import os
+import re
 from datetime import datetime, timezone
 
 import numpy as np
@@ -98,8 +99,6 @@ def init_db():
 
 
 init_db()
-
-
 def migrate_db():
     additions = {
         "applicant_name": "TEXT", "applicant_phone": "TEXT",
